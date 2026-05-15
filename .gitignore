@@ -1,4 +1,6 @@
 /target
 *.exe
+!easydesktop.exe
+!easydesktop-ui.exe
 debug.log
 history.json
