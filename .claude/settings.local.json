@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo check *)",
+      "Bash(C:/msys64/usr/bin/bash.exe *)",
+      "Bash(cmd *)",
+      "Bash(set PATH=C:/msys64/mingw64/bin:__TRACKED_VAR__)",
+      "Bash(rustup default *)",
+      "Bash(gcc --version)",
+      "Bash(cargo run *)",
+      "Bash(export PATH=\"/c/msys64/mingw64/bin:$PATH\")",
+      "Bash(mkdir -p /c/easydesktop)",
+      "Bash(cp -r /l/临时/easydesktop/* /c/easydesktop/)",
+      "Read(//c//**)",
+      "Bash(go version *)",
+      "Bash(go build *)",
+      "Bash(mkdir -p /c/easydesktop/dist)",
+      "Bash(cp -f /l/临时/easydesktop/dist/easydesktop.exe /c/easydesktop/dist/easydesktop.exe)",
+      "Bash(cp -f /l/临时/easydesktop/dist/install.bat /c/easydesktop/dist/install.bat)",
+      "Bash(go mod *)",
+      "Bash(go get *)",
+      "Bash(where *)",
+      "Bash(powershell *)",
+      "Bash(cargo build *)",
+      "Bash(rustup show *)",
+      "Bash(cargo +stable-x86_64-pc-windows-msvc build)",
+      "Bash(cargo +stable-x86_64-pc-windows-msvc check)",
+      "Bash(CARGO_TARGET_DIR=\"C:/tmp/easydesktop-target\" cargo +stable-x86_64-pc-windows-msvc check)",
+      "Bash(rustc --edition 2024 --crate-type lib --emit=metadata -o /dev/null \"L:\\\\临时\\\\easydesktop\\\\src\\\\main.rs\")",
+      "WebFetch(domain:github.com)"
+    ]
+  }
+}
