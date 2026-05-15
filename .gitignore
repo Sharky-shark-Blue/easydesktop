@@ -1,1 +1,4 @@
 /target
+*.exe
+debug.log
+history.json

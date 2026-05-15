@@ -246,15 +246,11 @@ func launchGUI() error {
 // ═══════════════════════════════════════════════════════════════
 
 func historyFilePath() (string, error) {
-	base := os.Getenv("LocalAppData")
-	if base == "" {
-		return "", errors.New("LocalAppData 不可用")
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("无法定位当前程序: %w", err)
 	}
-	dir := filepath.Join(base, "EasyDesktop")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "history.json"), nil
+	return filepath.Join(filepath.Dir(exe), "history.json"), nil
 }
 
 func loadHistory() (historyStore, error) {

@@ -27,7 +27,8 @@
       "Bash(cargo +stable-x86_64-pc-windows-msvc check)",
       "Bash(CARGO_TARGET_DIR=\"C:/tmp/easydesktop-target\" cargo +stable-x86_64-pc-windows-msvc check)",
       "Bash(rustc --edition 2024 --crate-type lib --emit=metadata -o /dev/null \"L:\\\\临时\\\\easydesktop\\\\src\\\\main.rs\")",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(git add *)"
     ]
   }
 }

@@ -43,8 +43,19 @@ const (
 	SM_CXSCREEN        = 0
 	IDM_SHOW           = 1001
 	IDM_EXIT           = 1002
-	SWP_NOACTIVATE     = 0x0010
-	HWND_TOPMOST_VAL   = ^uintptr(0)
+	SWP_NOACTIVATE    = 0x0010
+	SWP_FRAMECHANGED  = 0x0020
+	SWP_NOMOVE        = 0x0002
+	SWP_NOSIZE        = 0x0001
+	SWP_NOZORDER      = 0x0004
+	HWND_TOPMOST_VAL  = ^uintptr(0)
+
+	GWL_STYLE        = ^uintptr(15) // -16
+	GWL_EXSTYLE      = ^uintptr(19) // -20
+	WS_CAPTION       = uintptr(0x00C00000)
+	WS_THICKFRAME    = uintptr(0x00040000)
+	WS_SYSMENU       = uintptr(0x00080000)
+	WS_EX_TOOLWINDOW = uintptr(0x00000080)
 )
 
 // ─── Win32 结构体 ─────────────────────────────────────────────
@@ -123,27 +134,77 @@ var (
 	procGetSystemMetrics    = user32.NewProc("GetSystemMetrics")
 	procLoadCursorW         = user32.NewProc("LoadCursorW")
 	procLoadIconW           = user32.NewProc("LoadIconW")
-	procGetModuleHandleW    = kernel32.NewProc("GetModuleHandleW")
-	procShellNotifyIcon     = shell32.NewProc("Shell_NotifyIconW")
+	procGetModuleHandleW             = kernel32.NewProc("GetModuleHandleW")
+	procShellNotifyIcon              = shell32.NewProc("Shell_NotifyIconW")
+	procGetWindowLongPtr             = user32.NewProc("GetWindowLongPtrW")
+	procSetWindowLongPtr             = user32.NewProc("SetWindowLongPtrW")
+	procFindFirstChangeNotification  = kernel32.NewProc("FindFirstChangeNotificationW")
+	procFindNextChangeNotification   = kernel32.NewProc("FindNextChangeNotification")
+	procFindCloseChangeNotification  = kernel32.NewProc("FindCloseChangeNotification")
+	procWaitForSingleObject          = kernel32.NewProc("WaitForSingleObject")
 )
 
 // ─── 全局状态 ─────────────────────────────────────────────────
 var (
-	hwndMessage uintptr // 热键/托盘专用消息窗口
+	hwndMessage uintptr
 	hInstance   uintptr
 	wv          webview.WebView
 	mu          sync.Mutex
 	visible     bool
-	winHWND     uintptr // webview 窗口句柄
-	// 通道：热键线程 → 主线程
-	toggleCh = make(chan struct{}, 1)
-	quitCh   = make(chan struct{})
+	winHWND     uintptr
+	toggleCh    = make(chan struct{}, 1)
+	quitCh      = make(chan struct{})
+	exeDir      string // 解析一次，避免中文路径问题
 )
+
+func watchHistory() {
+	dir, _ := syscall.UTF16PtrFromString(exeDir)
+	const FILE_NOTIFY_CHANGE_LAST_WRITE = 0x00000010
+	const WAIT_OBJECT_0 = 0x00000000
+	const INFINITE = 0xFFFFFFFF
+
+	h, _, _ := procFindFirstChangeNotification.Call(
+		uintptr(unsafe.Pointer(dir)), 0, FILE_NOTIFY_CHANGE_LAST_WRITE)
+	if h == 0 || h == ^uintptr(0) {
+		return
+	}
+	defer procFindCloseChangeNotification.Call(h)
+
+	for {
+		r, _, _ := procWaitForSingleObject.Call(h, INFINITE)
+		if r != WAIT_OBJECT_0 {
+			break
+		}
+		mu.Lock()
+		isVisible := visible
+		mu.Unlock()
+		if isVisible {
+			b, _ := json.Marshal(loadSortedEntries())
+			wv.Dispatch(func() {
+				wv.Eval("window.receiveEntries(" + string(b) + ")")
+			})
+		}
+		procFindNextChangeNotification.Call(h)
+	}
+}
+
+func getExeDir() string {
+	buf := make([]uint16, 32768)
+	n, _, _ := procGetModuleHandleW.Call(0)
+	getModFileName := kernel32.NewProc("GetModuleFileNameW")
+	getModFileName.Call(n, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	full := syscall.UTF16ToString(buf)
+	dir := filepath.Dir(full)
+	os.WriteFile(filepath.Join(dir, "debug.log"),
+		[]byte("getExeDir: "+dir+"\n"), 0644)
+	return dir
+}
 
 // ─── 入口 ────────────────────────────────────────────────────
 func main() {
-	// WebView2 必须在主 OS 线程运行
 	runtime.LockOSThread()
+
+	exeDir = getExeDir()
 
 	hInstance, _, _ = procGetModuleHandleW.Call(0)
 
@@ -155,6 +216,7 @@ func main() {
 
 	// 热键 & 托盘消息：独立 goroutine（自己的 OS 线程）
 	go hotKeyLoop()
+	go watchHistory()
 
 	// 监听 toggle 请求，派发到主线程（webview.Dispatch）
 	go func() {
@@ -172,7 +234,8 @@ func main() {
 						procSetForegroundWindow.Call(winHWND)
 						procShowWindow.Call(winHWND, SW_SHOW)
 						visible = true
-						wv.Eval("window.onShow && window.onShow()")
+						b, _ := json.Marshal(loadSortedEntries())
+						wv.Eval("window.receiveEntries(" + string(b) + ")")
 					}
 				})
 			case <-quitCh:
@@ -277,6 +340,17 @@ func repositionWindow() {
 	)
 }
 
+func removeTitleBar(hwnd uintptr) {
+	style, _, _ := procGetWindowLongPtr.Call(hwnd, GWL_STYLE)
+	style &^= WS_CAPTION | WS_THICKFRAME | WS_SYSMENU
+	procSetWindowLongPtr.Call(hwnd, GWL_STYLE, style)
+	exStyle, _, _ := procGetWindowLongPtr.Call(hwnd, GWL_EXSTYLE)
+	exStyle |= WS_EX_TOOLWINDOW
+	procSetWindowLongPtr.Call(hwnd, GWL_EXSTYLE, exStyle)
+	procSetWindowPos.Call(hwnd, 0, 0, 0, 0, 0,
+		SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_FRAMECHANGED)
+}
+
 // ─── 托盘图标 ────────────────────────────────────────────────
 func addTrayIcon() {
 	nid := buildNID()
@@ -320,7 +394,7 @@ func initWebview() {
 	winW, winH := 860, 320
 
 	wv = webview.NewWithOptions(webview.WebViewOptions{
-		Debug:  false,
+		Debug:  true,
 		Window: nil,
 	})
 	wv.SetTitle("EasyDesktop")
@@ -333,18 +407,18 @@ func initWebview() {
 			visible = false
 			mu.Unlock()
 		})
-		go exec.Command("easydesktop.exe", path).Run()
+		cliExe := filepath.Join(exeDir, "easydesktop.exe")
+		go exec.Command(cliExe, path).Run()
 	})
-	wv.Bind("goLoadEntries", func() string {
-		entries := loadSortedEntries()
-		b, _ := json.Marshal(entries)
+	wv.Bind("goPin", func(path string) string {
+		pinEntry(path)
+		b, _ := json.Marshal(loadSortedEntries())
 		return string(b)
 	})
-	wv.Bind("goPin", func(path string) {
-		pinEntry(path)
-	})
-	wv.Bind("goDelete", func(path string) {
+	wv.Bind("goDelete", func(path string) string {
 		deleteEntry(path)
+		b, _ := json.Marshal(loadSortedEntries())
+		return string(b)
 	})
 	wv.Bind("goHide", func() {
 		wv.Dispatch(func() {
@@ -358,6 +432,7 @@ func initWebview() {
 	wv.SetHtml(htmlContent())
 
 	winHWND = uintptr(wv.Window())
+	removeTitleBar(winHWND)
 	x := (int(screenW) - winW) / 2
 	procSetWindowPos.Call(
 		winHWND, HWND_TOPMOST_VAL,
@@ -370,15 +445,17 @@ func initWebview() {
 
 // ─── 历史数据 ────────────────────────────────────────────────
 func historyFile() string {
-	return filepath.Join(os.Getenv("LocalAppData"), "EasyDesktop", "history.json")
+	return filepath.Join(exeDir, "history.json")
 }
 func loadSortedEntries() []historyEntry {
 	data, err := os.ReadFile(historyFile())
 	if err != nil {
-		return nil
+		return []historyEntry{}
 	}
 	var store historyStore
-	json.Unmarshal(data, &store)
+	if json.Unmarshal(data, &store) != nil || store.Entries == nil {
+		return []historyEntry{}
+	}
 	sort.SliceStable(store.Entries, func(i, j int) bool {
 		if store.Entries[i].Pinned != store.Entries[j].Pinned {
 			return store.Entries[i].Pinned
@@ -535,11 +612,12 @@ const searchEl=document.getElementById('searchInput');
 const countEl=document.getElementById('countLabel');
 const emptyEl=document.getElementById('empty');
 
-async function refreshCards(){
-  const raw=await goLoadEntries();
-  allEntries=JSON.parse(raw)||[];
+window.receiveEntries=function(entries){
+  allEntries=entries||[];
+  searchEl.value='';
   applyFilter();
-}
+  searchEl.focus();
+};
 function applyFilter(){
   const q=searchEl.value.trim().toLowerCase();
   filtered=q?allEntries.filter(e=>e.path.toLowerCase().includes(q)):[...allEntries];
@@ -553,7 +631,7 @@ function render(){
   filtered.forEach((e,i)=>{
     const div=document.createElement('div');
     div.className='row'+(i===activeIdx?' active':'');
-    const drive=e.path.split(/[\/]/)[0]||'';
+    const drive=e.path.split(/[\\\/]/)[0]||'';
     const t=e.updated_at?new Date(e.updated_at*1000).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'';
     div.innerHTML=
       '<div class="row-icon">📁</div>'+
@@ -571,9 +649,8 @@ function render(){
         '<button class="rbtn r-de">删除</button>'+
       '</div>';
     div.querySelector('.r-sw').onclick=ev=>{ev.stopPropagation();doSwitch(e.path);};
-    div.querySelector('.r-pi').onclick=ev=>{ev.stopPropagation();goPin(e.path).then(refreshCards);};
-    div.querySelector('.r-de').onclick=ev=>{ev.stopPropagation();if(confirm('删除？
-'+e.path))goDelete(e.path).then(refreshCards);};
+    div.querySelector('.r-pi').onclick=ev=>{ev.stopPropagation();goPin(e.path).then(raw=>{window.receiveEntries(JSON.parse(raw));});};
+    div.querySelector('.r-de').onclick=ev=>{ev.stopPropagation();if(confirm('删除？\n'+e.path))goDelete(e.path).then(raw=>{window.receiveEntries(JSON.parse(raw));});};
     div.onclick=()=>setActive(i);
     div.ondblclick=()=>doSwitch(e.path);
     track.appendChild(div);
@@ -592,14 +669,11 @@ document.addEventListener('keydown',e=>{
   if(e.key==='ArrowUp'){e.preventDefault();if(activeIdx>0){activeIdx--;render();}return;}
   if(e.key==='ArrowDown'){e.preventDefault();if(activeIdx<filtered.length-1){activeIdx++;render();}return;}
   if(e.key==='Enter'&&filtered[activeIdx]){doSwitch(filtered[activeIdx].path);return;}
-  if((e.ctrlKey||e.metaKey)&&e.key==='p'&&filtered[activeIdx]){e.preventDefault();goPin(filtered[activeIdx].path).then(refreshCards);}
+  if((e.ctrlKey||e.metaKey)&&e.key==='p'&&filtered[activeIdx]){e.preventDefault();goPin(filtered[activeIdx].path).then(raw=>{window.receiveEntries(JSON.parse(raw));});}
 });
 searchEl.addEventListener('input',applyFilter);
 document.getElementById('closeBtn').onclick=()=>goHide();
-window.onShow=function(){searchEl.value='';refreshCards().then(()=>searchEl.focus());};
 function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
-function tryInit(n){if(typeof goLoadEntries==='function'){refreshCards();}else if(n>0){setTimeout(()=>tryInit(n-1),80);}}
-tryInit(40);
 </script>
 </body>
 </html>`
