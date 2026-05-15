@@ -211,9 +211,6 @@ func main() {
 	// 先初始化 webview，拿到真实 HWND
 	initWebview()
 
-	// 托盘
-	addTrayIcon()
-
 	// 热键 & 托盘消息：独立 goroutine（自己的 OS 线程）
 	go hotKeyLoop()
 	go watchHistory()
@@ -274,6 +271,8 @@ func hotKeyLoop() {
 		0, 0, 0, 0,
 		^uintptr(2), 0, inst, 0,
 	)
+
+	addTrayIcon()
 
 	procRegisterHotKey.Call(hwndMessage, HOTKEY_ID, MOD_CONTROL, VK_E)
 
@@ -467,7 +466,11 @@ func loadSortedEntries() []historyEntry {
 func saveEntries(entries []historyEntry) {
 	store := historyStore{Entries: entries}
 	b, _ := json.MarshalIndent(store, "", "  ")
-	os.WriteFile(historyFile(), b, 0644)
+	tmp := historyFile() + ".tmp"
+	if err := os.WriteFile(tmp, b, 0644); err != nil {
+		return
+	}
+	os.Rename(tmp, historyFile())
 }
 func pinEntry(path string) {
 	entries := loadSortedEntries()

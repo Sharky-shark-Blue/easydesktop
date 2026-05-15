@@ -217,7 +217,6 @@ func launchGUI() error {
 	candidates := []string{
 		filepath.Join(exeDir, "easydesktop-ui.exe"),
 		filepath.Join(exeDir, "dist", "easydesktop-ui.exe"),
-		filepath.Join(exeDir, "dist", "easydesktop.exe"),
 	}
 
 	var guiPath string
@@ -287,7 +286,11 @@ func saveHistory(store historyStore) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(file, data, 0o644)
+	tmp := file + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, file)
 }
 
 func normalizePathForCompare(p string) string {
