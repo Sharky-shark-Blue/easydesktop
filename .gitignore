@@ -5,3 +5,4 @@
 debug.log
 history.json
 *.exe~
+.claude/
